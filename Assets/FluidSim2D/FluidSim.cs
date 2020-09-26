@@ -1,5 +1,6 @@
-using UnityEngine;
+
 using System.Collections;
+using UnityEngine;
 
 namespace FluidSim2DProject
 {
@@ -16,7 +17,6 @@ namespace FluidSim2DProject
         RenderTexture m_guiTex, m_divergenceTex, m_obstaclesTex;
         RenderTexture[] m_velocityTex, m_densityTex, m_pressureTex, m_temperatureTex;
 
-        float m_timeStep = 0.125f;
         float m_impulseTemperature = 10.0f;
         float m_impulseDensity = 1.0f;
         float m_temperatureDissipation = 0.99f;
@@ -39,19 +39,17 @@ namespace FluidSim2DProject
         Vector2 m_obstaclePos = new Vector2(0.5f, 0.5f);
         float m_obstacleRadius = 0.1f;
 
-        GUITexture m_gui;
-
+        Rect m_rect;
         int m_width, m_height;
-        Vector2 m_offset;
-
+ 
         void Start()
         {
+            m_width = 512;
+            m_height = 512;
 
-            m_gui = GetComponent<GUITexture>();
-
-            m_width = (int)m_gui.pixelInset.width;
-            m_height = (int)m_gui.pixelInset.height;
-            m_offset = new Vector2(m_gui.pixelInset.x, m_gui.pixelInset.y);
+            Vector2 size = new Vector2(m_width, m_height);
+            Vector2 pos = new Vector2(Screen.width / 2, Screen.height / 2) - size * 0.5f;
+            m_rect = new Rect(pos, size);
 
             m_inverseSize = new Vector2(1.0f / m_width, 1.0f / m_height);
 
@@ -79,10 +77,11 @@ namespace FluidSim2DProject
             m_obstaclesTex.filterMode = FilterMode.Point;
             m_obstaclesTex.wrapMode = TextureWrapMode.Clamp;
             m_obstaclesTex.Create();
+        }
 
-            GetComponent<GUITexture>().texture = m_guiTex;
-            m_guiMat.SetTexture("_Obstacles", m_obstaclesTex);
-
+        void OnGUI()
+        {
+            GUI.DrawTexture(m_rect, m_guiTex);
         }
 
         void CreateSurface(RenderTexture[] surface, RenderTextureFormat format, FilterMode filter)
@@ -98,10 +97,10 @@ namespace FluidSim2DProject
             surface[1].Create();
         }
 
-        void Advect(RenderTexture velocity, RenderTexture source, RenderTexture dest, float dissipation)
+        void Advect(RenderTexture velocity, RenderTexture source, RenderTexture dest, float dissipation, float timeStep)
         {
             m_advectMat.SetVector("_InverseSize", m_inverseSize);
-            m_advectMat.SetFloat("_TimeStep", m_timeStep);
+            m_advectMat.SetFloat("_TimeStep", timeStep);
             m_advectMat.SetFloat("_Dissipation", dissipation);
             m_advectMat.SetTexture("_Velocity", velocity);
             m_advectMat.SetTexture("_Source", source);
@@ -110,14 +109,13 @@ namespace FluidSim2DProject
             Graphics.Blit(null, dest, m_advectMat);
         }
 
-        void ApplyBuoyancy(RenderTexture velocity, RenderTexture temperature, RenderTexture density, RenderTexture dest)
+        void ApplyBuoyancy(RenderTexture velocity, RenderTexture temperature, RenderTexture density, RenderTexture dest, float timeStep)
         {
-
             m_buoyancyMat.SetTexture("_Velocity", velocity);
             m_buoyancyMat.SetTexture("_Temperature", temperature);
             m_buoyancyMat.SetTexture("_Density", density);
             m_buoyancyMat.SetFloat("_AmbientTemperature", m_ambientTemperature);
-            m_buoyancyMat.SetFloat("_TimeStep", m_timeStep);
+            m_buoyancyMat.SetFloat("_TimeStep", timeStep);
             m_buoyancyMat.SetFloat("_Sigma", m_smokeBuoyancy);
             m_buoyancyMat.SetFloat("_Kappa", m_smokeWeight);
 
@@ -126,19 +124,16 @@ namespace FluidSim2DProject
 
         void ApplyImpulse(RenderTexture source, RenderTexture dest, Vector2 pos, float radius, float val)
         {
-
             m_impluseMat.SetVector("_Point", pos);
             m_impluseMat.SetFloat("_Radius", radius);
             m_impluseMat.SetFloat("_Fill", val);
             m_impluseMat.SetTexture("_Source", source);
 
             Graphics.Blit(null, dest, m_impluseMat);
-
         }
 
         void ComputeDivergence(RenderTexture velocity, RenderTexture dest)
         {
-
             m_divergenceMat.SetFloat("_HalfInverseCellSize", 0.5f / m_cellSize);
             m_divergenceMat.SetTexture("_Velocity", velocity);
             m_divergenceMat.SetVector("_InverseSize", m_inverseSize);
@@ -194,7 +189,7 @@ namespace FluidSim2DProject
             texs[1] = temp;
         }
 
-        void Update()
+        void FixedUpdate()
         {
             //Obstacles only need to be added once unless changed.
             AddObstacles();
@@ -205,20 +200,21 @@ namespace FluidSim2DProject
 
             int READ = 0;
             int WRITE = 1;
+            float dt = 0.125f;
 
             //Advect velocity against its self
-            Advect(m_velocityTex[READ], m_velocityTex[READ], m_velocityTex[WRITE], m_velocityDissipation);
+            Advect(m_velocityTex[READ], m_velocityTex[READ], m_velocityTex[WRITE], m_velocityDissipation, dt);
             //Advect temperature against velocity
-            Advect(m_velocityTex[READ], m_temperatureTex[READ], m_temperatureTex[WRITE], m_temperatureDissipation);
+            Advect(m_velocityTex[READ], m_temperatureTex[READ], m_temperatureTex[WRITE], m_temperatureDissipation, dt);
             //Advect density against velocity
-            Advect(m_velocityTex[READ], m_densityTex[READ], m_densityTex[WRITE], m_densityDissipation);
+            Advect(m_velocityTex[READ], m_densityTex[READ], m_densityTex[WRITE], m_densityDissipation, dt);
 
             Swap(m_velocityTex);
             Swap(m_temperatureTex);
             Swap(m_densityTex);
 
             //Determine how the flow of the fluid changes the velocity
-            ApplyBuoyancy(m_velocityTex[READ], m_temperatureTex[READ], m_densityTex[READ], m_velocityTex[WRITE]);
+            ApplyBuoyancy(m_velocityTex[READ], m_temperatureTex[READ], m_densityTex[READ], m_velocityTex[WRITE], dt);
 
             Swap(m_velocityTex);
 
@@ -234,13 +230,11 @@ namespace FluidSim2DProject
             {
                 Vector2 pos = Input.mousePosition;
 
-                pos.x -= Screen.width * 0.5f;
-                pos.y -= Screen.height * 0.5f;
+                pos.x -= m_rect.xMin;
+                pos.y -= m_rect.yMin;
 
-                pos -= m_offset;
-
-                pos.x /= m_width - 1.0f;
-                pos.y /= m_height - 1.0f;
+                pos.x /= m_rect.width;
+                pos.y /= m_rect.height;
 
                 float sign = (Input.GetMouseButton(0)) ? 1.0f : -1.0f;
 
@@ -268,7 +262,8 @@ namespace FluidSim2DProject
 
             Swap(m_velocityTex);
 
-            //Render the rex you want to see into gui tex. Will only use the red channel
+            //Render the tex you want to see into gui tex. Will only use the red channel
+            m_guiMat.SetTexture("_Obstacles", m_obstaclesTex);
             Graphics.Blit(m_densityTex[READ], m_guiTex, m_guiMat);
         }
     }
